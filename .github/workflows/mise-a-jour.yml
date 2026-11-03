@@ -1,0 +1,122 @@
+# Robot de mise a jour de REA de Rig's.
+# Chaque lundi (ou a la main) : regarde s'il existe une nouvelle version de rea-agents,
+# verifie sa signature et sa provenance, ecrit un rapport, construit la boite fermee,
+# et ouvre une demande (pull request). Rien n'arrive dans l'appli tant que Rig's n'a pas accepte.
+name: Mise a jour REA
+
+on:
+  schedule:
+    - cron: "41 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      forcer:
+        description: "Reconstruire la boite meme sans nouvelle version"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  packages: write
+
+concurrency:
+  group: mise-a-jour
+  cancel-in-progress: false
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Versions
+        id: v
+        run: |
+          set -euo pipefail
+          cur="$(tr -d ' \r\n' < rea-version.txt)"
+          new="$(npm view rea-agents version)"
+          echo "cur=$cur" >> "$GITHUB_OUTPUT"
+          echo "new=$new" >> "$GITHUB_OUTPUT"
+          if [ "$cur" = "$new" ] && [ "${{ inputs.forcer }}" != "true" ]; then
+            echo "Deja a jour ($cur)."; echo "rien=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Signature et provenance
+        if: steps.v.outputs.rien != '1'
+        run: |
+          set -euo pipefail
+          new="${{ steps.v.outputs.new }}"
+          repo="$(npm view "rea-agents@$new" repository.url)"
+          case "$repo" in *github.com/morluto/rea*) ;; *) echo "Depot inattendu : $repo"; exit 1;; esac
+          mkdir /tmp/sig && cd /tmp/sig && npm init -y >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund "rea-agents@$new" >/dev/null
+          npm audit signatures
+          npm audit --omit=dev --audit-level=critical || echo "AUDIT_ALERTE=1" >> "$GITHUB_ENV"
+
+      - name: Rapport
+        if: steps.v.outputs.rien != '1'
+        run: |
+          set -euo pipefail
+          cd /tmp
+          for v in "${{ steps.v.outputs.cur }}" "${{ steps.v.outputs.new }}"; do
+            mkdir -p "pk-$v" && npm pack "rea-agents@$v" --silent >/dev/null
+            tar -xzf "rea-agents-$v.tgz" -C "pk-$v" --strip-components=1
+          done
+          python3 "$GITHUB_WORKSPACE/scripts/rapport.py" "pk-${{ steps.v.outputs.cur }}" "pk-${{ steps.v.outputs.new }}" \
+            "${{ steps.v.outputs.cur }}" "${{ steps.v.outputs.new }}" > /tmp/rapport.md
+          if [ "${AUDIT_ALERTE:-0}" = "1" ]; then printf '\n**npm audit signale une faille critique : ne pas accepter sans verifier.**\n' >> /tmp/rapport.md; fi
+          cat /tmp/rapport.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Connexion au registre d'images
+        if: steps.v.outputs.rien != '1'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Construire et tester la boite
+        if: steps.v.outputs.rien != '1'
+        id: img
+        run: |
+          set -euo pipefail
+          new="${{ steps.v.outputs.new }}"
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          img="ghcr.io/$owner/rea-rigs:$new"
+          docker build --pull --build-arg "REA_VERSION=$new" -t "$img" container
+          # test : la boite demarre sans reseau, en lecture seule, sans droits
+          docker run --rm --network none --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges "$img" --version
+          docker push "$img"
+          digest="$(docker inspect --format '{{index .RepoDigests 0}}' "$img" | cut -d@ -f2)"
+          echo "image=ghcr.io/$owner/rea-rigs" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Demande de mise a jour
+        if: steps.v.outputs.rien != '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          new="${{ steps.v.outputs.new }}"
+          br="maj/rea-$new-$(date +%Y%m%d%H%M)"
+          git config user.name "robot REA de Rig's"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$br"
+          echo "$new" > rea-version.txt
+          python3 - "$new" "${{ steps.img.outputs.image }}" "${{ steps.img.outputs.digest }}" <<'PY'
+          import json, sys, datetime
+          v, img, dg = sys.argv[1:4]
+          json.dump({"version": v, "image": img, "digest": dg,
+                     "date": datetime.date.today().isoformat()}, open("latest.json", "w"), indent=2)
+          open("latest.json", "a").write("\n")
+          PY
+          git add rea-version.txt latest.json
+          git commit -m "chore: REA $new"
+          git push origin "$br"
+          gh pr create --base main --head "$br" --title "Mise a jour REA $new" --body-file /tmp/rapport.md
