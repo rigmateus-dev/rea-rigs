@@ -1,7 +1,6 @@
 {
-  "version": "",
+  "version": "6.8.0",
   "image": "ghcr.io/rigmateus-dev/rea-rigs",
-  "digest": "",
-  "date": "",
-  "note": "Rempli par le robot « Mise a jour REA » apres la premiere construction."
+  "digest": "sha256:7cb2c00994247ac7a3f799edc36c7689c725d75d76ee1e99b792b02816d1ac53",
+  "date": "2026-11-03"
 }
