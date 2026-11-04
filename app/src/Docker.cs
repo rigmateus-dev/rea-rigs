@@ -104,6 +104,45 @@ namespace ReaRigs
             catch { return "Docker Desktop n'est pas installé."; }
         }
 
+        static string DesktopExe()
+        {
+            foreach (var root in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + "\\Programs" })
+            {
+                string p = Path.Combine(root, "Docker", "Docker", "Docker Desktop.exe");
+                if (File.Exists(p)) return p;
+            }
+            return null;
+        }
+
+        // demarre Docker Desktop et attend qu'il reponde (2 min max) ; texte vide = ok
+        public static string StartDesktop()
+        {
+            string exe = DesktopExe();
+            if (exe == null) return "Docker Desktop n'est pas installé.";
+            try { Process.Start(new ProcessStartInfo(exe) { UseShellExecute = true, WindowStyle = ProcessWindowStyle.Minimized }); } catch (Exception ex) { return "Docker ne démarre pas : " + ex.Message; }
+            for (int i = 0; i < 60; i++) { Thread.Sleep(2000); if (Check() == "") return ""; }
+            return "Docker met trop de temps à démarrer. Réessaie dans un instant.";
+        }
+
+        static void Quiet(string exe, string args, int ms)
+        {
+            try
+            {
+                using (var p = Process.Start(new ProcessStartInfo(exe, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true }))
+                { p.StandardOutput.ReadToEndAsync(); p.StandardError.ReadToEndAsync(); if (!p.WaitForExit(ms)) try { p.Kill(); } catch { } }
+            }
+            catch { }
+        }
+
+        // « Tout arreter » : Docker Desktop puis la machine Linux (WSL) -> plus rien en memoire
+        public static void StopAll()
+        {
+            Quiet("docker", "desktop stop", 60000);
+            foreach (string n in new[] { "Docker Desktop", "com.docker.backend", "com.docker.build" })
+                foreach (var p in Process.GetProcessesByName(n)) try { p.Kill(); } catch { }
+            Quiet("wsl", "--shutdown", 60000);
+        }
+
         public static Task<Result> Pull(string imageRef, Action<string> line)
         {
             return Run(new[] { "pull", imageRef }, null, CancellationToken.None, line);

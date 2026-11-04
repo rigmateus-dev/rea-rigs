@@ -77,8 +77,10 @@ namespace ReaRigs
             titles.Children.Add(chips);
             installBtn = Btn("Installer REA", Update);
             claudeBtn = Btn("Brancher à Claude", ToggleClaude);
+            var stopBtn = Btn("Tout arrêter", StopAll);
+            stopBtn.ToolTip = "Ferme Docker et sa machine Linux : plus rien ne consomme de mémoire.";
             var right = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
-            right.Children.Add(installBtn); right.Children.Add(claudeBtn);
+            right.Children.Add(installBtn); right.Children.Add(claudeBtn); right.Children.Add(stopBtn);
             DockPanel.SetDock(right, Dock.Right); top.Children.Add(right); top.Children.Add(titles);
             DockPanel.SetDock(top, Dock.Top); root.Children.Add(top);
 
@@ -151,28 +153,52 @@ namespace ReaRigs
             versionState.Foreground = Cfg.ImageRef.Length > 0 ? Muted : Warn;
             installBtn.Content = Cfg.ImageRef.Length > 0 ? "Vérifier les mises à jour" : "Installer REA";
             claudeBtn.Content = Cfg.ClaudeLinked() ? "Débrancher de Claude" : "Brancher à Claude";
-            if (d.Length > 0) Say("Démarre Docker Desktop, puis relance l'appli.", Warn);
+            if (d.Length > 0) { dockerState.Text = "● Boîte arrêtée (démarre toute seule à la prochaine analyse)"; dockerState.Foreground = Muted; }
+        }
+
+        // Docker ne tourne que quand on en a besoin : demarre a la demande
+        async Task<bool> EnsureDocker()
+        {
+            if (await Task.Run(() => Box.Check()) == "") return true;
+            Say("Démarrage de la boîte (Docker)… ça peut prendre une minute.", Muted);
+            string err = await Task.Run(() => Box.StartDesktop());
+            await CheckAll();
+            if (err.Length > 0) { Say(err, Bad); return false; }
+            return true;
+        }
+
+        async void StopAll()
+        {
+            if (cts != null) { Say("Une analyse est en cours : annule-la d'abord.", Warn); return; }
+            Say("Arrêt de Docker et de WSL…", Muted);
+            await Task.Run(() => Box.StopAll());
+            await CheckAll();
+            Say("Tout est arrêté : REA ne consomme plus rien.", Ok);
         }
 
         async void Update()
         {
             installBtn.IsEnabled = false;
-            try
-            {
-                Say("Recherche de la dernière version validée…", Muted);
-                var r = await Task.Run(() => Cfg.FetchLatest());
-                string cur = Cfg.Get("digest");
-                if (r.Digest == cur) { Say("REA est à jour (" + r.Version + ").", Ok); return; }
-                if (cur.Length > 0 && MessageBox.Show(this, "Nouvelle version validée : REA " + r.Version + " (" + r.Date + ").\nL'installer ?", "REA de Rig's", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
-                Say("Téléchargement de la boîte REA " + r.Version + "…", Muted);
-                var p = await Box.Pull(r.Image + "@" + r.Digest, null);
-                if (p.Code != 0) throw new Exception("Téléchargement impossible : " + p.Err.Trim());
-                Cfg.Data["image"] = r.Image; Cfg.Data["digest"] = r.Digest; Cfg.Data["version"] = r.Version; Cfg.Save();
-                if (Cfg.ClaudeLinked()) Cfg.LinkClaude();          // Claude suit la nouvelle empreinte
-                Say("REA " + r.Version + " installé.", Ok);
-            }
+            try { await UpdateCore(); }
             catch (Exception ex) { Say(ex.Message, Bad); }
-            finally { installBtn.IsEnabled = true; await CheckAll(); }
+            installBtn.IsEnabled = true;
+            await CheckAll();
+        }
+
+        async Task UpdateCore()
+        {
+            if (!await EnsureDocker()) return;
+            Say("Recherche de la dernière version validée…", Muted);
+            var r = await Task.Run(() => Cfg.FetchLatest());
+            string cur = Cfg.Get("digest");
+            if (r.Digest == cur) { Say("REA est à jour (" + r.Version + ").", Ok); return; }
+            if (cur.Length > 0 && MessageBox.Show(this, "Nouvelle version validée : REA " + r.Version + " (" + r.Date + ").\nL'installer ?", "REA de Rig's", MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+            Say("Téléchargement de la boîte REA " + r.Version + "…", Muted);
+            var p = await Box.Pull(r.Image + "@" + r.Digest, null);
+            if (p.Code != 0) throw new Exception("Téléchargement impossible : " + p.Err.Trim());
+            Cfg.Data["image"] = r.Image; Cfg.Data["digest"] = r.Digest; Cfg.Data["version"] = r.Version; Cfg.Save();
+            if (Cfg.ClaudeLinked()) Cfg.LinkClaude();          // Claude suit la nouvelle empreinte
+            Say("REA " + r.Version + " installé.", Ok);
         }
 
         async void ToggleClaude()
@@ -198,6 +224,7 @@ namespace ReaRigs
             catch (Exception ex) { Say(ex.Message, Bad); return; }
             cts = new CancellationTokenSource();
             cancelBtn.Visibility = Visibility.Visible; drop.Opacity = 0.85;
+            if (!await EnsureDocker()) { cts = null; cancelBtn.Visibility = Visibility.Collapsed; drop.Opacity = 1; return; }
             var sw = Stopwatch.StartNew();
             try
             {
