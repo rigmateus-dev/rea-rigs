@@ -66,7 +66,28 @@ namespace ReaRigs
         }
 
         // ------------------------------------------------------------- appli Claude (claude_desktop_config.json)
-        public static string ClaudeConfig { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude", "claude_desktop_config.json"); } }
+        public static string ClaudeConfig { get { return ClaudeConfigs().First(); } }
+
+        // l'appli Claude installee depuis le Microsoft Store (MSIX) lit sa config dans son dossier de paquet,
+        // pas dans %APPDATA%\Claude : on ecrit la ou elle lit vraiment (tous les emplacements trouves)
+        public static List<string> ClaudeConfigs()
+        {
+            var res = new List<string>();
+            try
+            {
+                string pk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages");
+                if (Directory.Exists(pk))
+                    foreach (string d in Directory.GetDirectories(pk, "Claude_*"))
+                    {
+                        string c = Path.Combine(d, "LocalCache", "Roaming", "Claude");
+                        if (Directory.Exists(c)) res.Add(Path.Combine(c, "claude_desktop_config.json"));
+                    }
+            }
+            catch { }
+            string roam = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Claude");
+            if (res.Count == 0 || Directory.Exists(roam)) res.Add(Path.Combine(roam, "claude_desktop_config.json"));
+            return res;
+        }
 
         public static List<string> McpArgs()
         {
@@ -77,14 +98,20 @@ namespace ReaRigs
 
         public static bool ClaudeLinked()
         {
-            try { return File.Exists(ClaudeConfig) && File.ReadAllText(ClaudeConfig).Contains("\"rea-de-rigs\""); } catch { return false; }
+            try { return ClaudeConfigs().Any(f => File.Exists(f) && File.ReadAllText(f).Contains("\"rea-de-rigs\"")); } catch { return false; }
         }
 
         // ajoute (ou met a jour) le serveur « rea-de-rigs » sans toucher au reste ; copie de sauvegarde avant
         public static string LinkClaude()
         {
             if (ImageRef.Length == 0) throw new Exception("Installe d'abord REA (bouton Installer).");
-            string f = ClaudeConfig;
+            var done = new List<string>();
+            foreach (string f in ClaudeConfigs()) { LinkOne(f); done.Add(f); }
+            return string.Join(" + ", done);
+        }
+
+        static void LinkOne(string f)
+        {
             Directory.CreateDirectory(Path.GetDirectoryName(f));
             Dict root = new Dict();
             if (File.Exists(f))
@@ -95,16 +122,19 @@ namespace ReaRigs
             }
             object o; Dict servers = root.TryGetValue("mcpServers", out o) ? o as Dict : null;
             if (servers == null) { servers = new Dict(); root["mcpServers"] = servers; }
-            servers["rea-de-rigs"] = new Dict { { "command", "docker" }, { "args", McpArgs().Cast<object>().ToArray() } };
+            // l'appli elle-meme sert de lanceur : elle demarre Docker s'il est arrete, puis relaie vers la boite
+            string me = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            servers["rea-de-rigs"] = new Dict { { "command", me }, { "args", new object[] { "--mcp" } } };
             string tmp = f + ".tmp";
             File.WriteAllText(tmp, Pretty(Js.Serialize(root)), new UTF8Encoding(false));
             if (File.Exists(f)) File.Replace(tmp, f, null); else File.Move(tmp, f);
-            return f;
         }
 
-        public static void UnlinkClaude()
+        public static void UnlinkClaude() { foreach (string f in ClaudeConfigs()) UnlinkOne(f); }
+
+        static void UnlinkOne(string f)
         {
-            string f = ClaudeConfig; if (!File.Exists(f)) return;
+            if (!File.Exists(f)) return;
             var root = Js.Deserialize<Dict>(File.ReadAllText(f, Encoding.UTF8)) ?? new Dict();
             object o; var servers = root.TryGetValue("mcpServers", out o) ? o as Dict : null;
             if (servers == null || !servers.Remove("rea-de-rigs")) return;

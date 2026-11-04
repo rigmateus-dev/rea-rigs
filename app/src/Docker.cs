@@ -143,6 +143,35 @@ namespace ReaRigs
             Quiet("wsl", "--shutdown", 60000);
         }
 
+        // mode « outil de Claude » : Claude parle a REA par stdin/stdout ; on demarre Docker si besoin,
+        // puis on relaie les deux flux vers « docker run -i … rea mcp » (memes protections)
+        public static int McpRelay()
+        {
+            try
+            {
+                if (Check() != "" && StartDesktop() != "") return 2;
+                string img = Cfg.ImageRef; if (img.Length == 0) return 3;
+                var psi = new ProcessStartInfo("docker", Join(Cfg.McpArgs()))
+                {
+                    UseShellExecute = false, CreateNoWindow = true,
+                    RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+                };
+                using (var p = Process.Start(psi))
+                using (var stdin = Console.OpenStandardInput())
+                using (var stdout = Console.OpenStandardOutput())
+                using (var stderr = Console.OpenStandardError())
+                {
+                    var a = Task.Run(() => { try { var buf = new byte[65536]; int n; var o = p.StandardInput.BaseStream; while ((n = stdin.Read(buf, 0, buf.Length)) > 0) { o.Write(buf, 0, n); o.Flush(); } } catch { } try { p.StandardInput.Close(); } catch { } });
+                    var b = Task.Run(() => { try { var buf = new byte[65536]; int n; var s = p.StandardOutput.BaseStream; while ((n = s.Read(buf, 0, buf.Length)) > 0) { stdout.Write(buf, 0, n); stdout.Flush(); } } catch { } });
+                    var c = Task.Run(() => { try { p.StandardError.BaseStream.CopyTo(stderr); } catch { } });
+                    p.WaitForExit();
+                    Task.WaitAll(new[] { b, c }, 5000);
+                    return p.ExitCode;
+                }
+            }
+            catch { return 1; }
+        }
+
         public static Task<Result> Pull(string imageRef, Action<string> line)
         {
             return Run(new[] { "pull", imageRef }, null, CancellationToken.None, line);
