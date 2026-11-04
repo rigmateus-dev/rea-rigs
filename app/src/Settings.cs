@@ -73,6 +73,14 @@ namespace ReaRigs
         public static List<string> ClaudeConfigs()
         {
             var res = new List<string>();
+            // appli Claude recente : %LOCALAPPDATA%\Claude-Data\claude_<id>\claude_desktop_config.json
+            try
+            {
+                string cd = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Claude-Data");
+                if (Directory.Exists(cd))
+                    foreach (string d in Directory.GetDirectories(cd, "claude_*")) res.Add(Path.Combine(d, "claude_desktop_config.json"));
+            }
+            catch { }
             try
             {
                 string pk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Packages");
