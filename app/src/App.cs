@@ -23,7 +23,7 @@ namespace ReaRigs
         public static int Main(string[] args)
         {
             if (args.Length > 0 && args[0] == "--debrancher") { try { Cfg.UnlinkClaude(); } catch { } return 0; }
-            if (args.Length > 0 && args[0] == "--mcp") { Cfg.Load(); return Box.McpRelay(); }
+            if (args.Length > 0 && args[0] == "--mcp") { Cfg.Load(); return McpRelay.Run(); }
             bool created;
             using (var m = new Mutex(true, "REA-de-Rigs-une-seule-fenetre", out created))
             {
