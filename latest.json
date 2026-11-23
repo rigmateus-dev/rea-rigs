@@ -1,6 +1,6 @@
 {
-  "version": "6.8.0",
+  "version": "6.10.1",
   "image": "ghcr.io/rigmateus-dev/rea-rigs",
-  "digest": "sha256:7cb2c00994247ac7a3f799edc36c7689c725d75d76ee1e99b792b02816d1ac53",
-  "date": "2026-11-03"
+  "digest": "sha256:961463cdc2e77ed0127dd12d83ba342a2e2ff663ed10768e2a15d9b7a5a69838",
+  "date": "2026-11-23"
 }
